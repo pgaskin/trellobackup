@@ -86,7 +86,7 @@ func main() {
 			ts := strings.TrimRight(t, "s")
 
 			fmt.Printf("--> Downloading %s\n", t)
-			for _, m := range regexp.MustCompile(`"url": ?"(https?://trello-"+t+".s3.amazonaws.com/[^"]+)"`).FindAllStringSubmatch(string(buf), -1) {
+			for _, m := range regexp.MustCompile(`"url": ?"(https?://trello-`+t+`.s3.amazonaws.com/[^"]+)"`).FindAllStringSubmatch(string(buf), -1) {
 				fmt.Printf("    Downloading %s %s\n", ts, m[1])
 
 				u, err := url.Parse(m[1])
