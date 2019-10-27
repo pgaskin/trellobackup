@@ -14,14 +14,20 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/xlzd/gotp"
 )
 
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Println("Usage: trellobackup USERNAME PASSWORD")
+	if len(os.Args) != 3 && len(os.Args) != 4 {
+		fmt.Println("Usage: trellobackup USERNAME PASSWORD [TOTP_SECRET]")
 		os.Exit(1)
 	}
-	username, password := os.Args[1], os.Args[2]
+	username, password, totp := os.Args[1], os.Args[2], ""
+
+	if len(os.Args) == 4 {
+		totp = os.Args[3]
+	}
 
 	c := &http.Client{}
 	c.Jar, _ = cookiejar.New(nil)
@@ -34,7 +40,14 @@ func main() {
 	}
 
 	fmt.Println("Authenticating")
-	authentication, err := getAuthentication(c, username, password)
+	authentication, err := getAuthentication(c, username, password, "")
+	if err != nil && strings.Contains(err.Error(), "TWO_FACTOR_MISSING") {
+		if totp == "" {
+			fmt.Fprintf(os.Stderr, "Error: could not authenticate: second factor required\n")
+			os.Exit(1)
+		}
+		authentication, err = getAuthentication(c, username, password, totp)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: could not authenticate: %v\n", err)
 		os.Exit(1)
@@ -149,12 +162,17 @@ func getLoginToken(c *http.Client) (string, error) {
 	return ms[1], nil
 }
 
-func getAuthentication(c *http.Client, username, password string) (string, error) {
-	resp, err := c.PostForm("https://trello.com/1/authentication", url.Values{
+func getAuthentication(c *http.Client, username, password, totpSecret string) (string, error) {
+	params := url.Values{
 		"factors[user]":     []string{username},
 		"factors[password]": []string{password},
 		"method":            []string{"password"},
-	})
+	}
+	if totpSecret != "" {
+		params.Set("factors[totp][password]", gotp.NewDefaultTOTP(totpSecret).Now())
+	}
+
+	resp, err := c.PostForm("https://trello.com/1/authentication", params)
 	if err != nil {
 		return "", wrap("could not submit login info (trellobackup may need to be updated)", err)
 	}
