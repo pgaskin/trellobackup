@@ -68,6 +68,11 @@ func main() {
 	}
 
 	for _, board := range boards {
+		if board.Closed {
+			fmt.Printf("Skipping closed board %s (%s) (id: %s)\n", board.Name, board.ShortLink, board.ID)
+			continue
+		}
+
 		fmt.Printf("Backing up %s (%s) (id: %s)\n", board.Name, board.ShortLink, board.ID)
 		fmt.Println("--> Saving JSON")
 		resp, err := c.Get(board.ShortURL + ".json")
@@ -210,7 +215,10 @@ func updateSession(c *http.Client, authentication, token string) error {
 	return nil
 }
 
-func getBoards(c *http.Client) ([]struct{ ShortURL, ShortLink, ID, Name string }, error) {
+func getBoards(c *http.Client) (boards []struct {
+	ShortURL, ShortLink, ID, Name string
+	Closed                        bool
+}, err error) {
 	resp, err := c.Get("https://trello.com/1/Members/me/boards")
 	if err != nil {
 		return nil, wrap("could not send request to api (trellobackup may need to be updated)", err)
@@ -222,7 +230,6 @@ func getBoards(c *http.Client) ([]struct{ ShortURL, ShortLink, ID, Name string }
 		return nil, wrap("could not read response body", err)
 	}
 
-	var boards []struct{ ShortURL, ShortLink, ID, Name string }
 	err = json.Unmarshal(buf, &boards)
 	if err != nil {
 		return nil, wrap("could not parse response body", err)
