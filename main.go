@@ -150,20 +150,19 @@ func main() {
 func getLoginToken(c *http.Client) (string, error) {
 	resp, err := c.Get("https://trello.com/login")
 	if err != nil {
-		return "", wrap("could not get login page", err)
+		return "", fmt.Errorf("could not get login page: %w", err)
 	}
 	defer resp.Body.Close()
 
 	buf, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return "", wrap("could not read response body", err)
+		return "", fmt.Errorf("could not read response body: %w", err)
 	}
 
 	ms := regexp.MustCompile(`dsc="([a-zA-Z0-9]+)"`).FindStringSubmatch(string(buf))
 	if len(ms) != 2 {
 		return "", errors.New("could not find dsc (trellobackup may need to be updated)")
 	}
-
 	return ms[1], nil
 }
 
@@ -179,39 +178,28 @@ func getAuthentication(c *http.Client, username, password, totpSecret string) (s
 
 	resp, err := c.PostForm("https://trello.com/1/authentication", params)
 	if err != nil {
-		return "", wrap("could not submit login info (trellobackup may need to be updated)", err)
+		return "", fmt.Errorf("could not submit login info (trellobackup may need to be updated): %w", err)
 	}
 	defer resp.Body.Close()
 
-	buf, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return "", wrap("could not read response body", err)
-	}
-
 	var obj struct{ Code, Error string }
-	err = json.Unmarshal(buf, &obj)
-	if err == nil && obj.Error != "" {
-		err = errors.New(obj.Error)
+	if err := json.NewDecoder(resp.Body).Decode(&obj); err != nil {
+		return "", fmt.Errorf("decode response error: %w", err)
+	} else if obj.Error != "" {
+		return "", fmt.Errorf("api error: %s", obj.Error)
 	}
-	if err != nil {
-		return "", wrap("api error", err)
-	}
-
 	return obj.Code, nil
 }
 
 func updateSession(c *http.Client, authentication, token string) error {
-	resp, err := c.PostForm("https://trello.com/1/authorization/session", url.Values{
+	if resp, err := c.PostForm("https://trello.com/1/authorization/session", url.Values{
 		"authentication": []string{authentication},
 		"dsc":            []string{token},
-	})
-	if err != nil {
-		return wrap("could not send request to api (trellobackup may need to be updated)", err)
+	}); err != nil {
+		return fmt.Errorf("could not send request to api (trellobackup may need to be updated): %w", err)
+	} else {
+		resp.Body.Close()
 	}
-	defer resp.Body.Close()
-
-	ioutil.ReadAll(resp.Body)
-
 	return nil
 }
 
@@ -221,23 +209,12 @@ func getBoards(c *http.Client) (boards []struct {
 }, err error) {
 	resp, err := c.Get("https://trello.com/1/Members/me/boards")
 	if err != nil {
-		return nil, wrap("could not send request to api (trellobackup may need to be updated)", err)
+		return nil, fmt.Errorf("could not send request to api (trellobackup may need to be updated): %w", err)
 	}
+	defer resp.Body.Close()
 
-	buf, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return nil, wrap("could not read response body", err)
+	if err := json.NewDecoder(resp.Body).Decode(&boards); err != nil {
+		return nil, fmt.Errorf("could not parse response body: %w", err)
 	}
-
-	err = json.Unmarshal(buf, &boards)
-	if err != nil {
-		return nil, wrap("could not parse response body", err)
-	}
-
 	return boards, nil
-}
-
-func wrap(msg string, err error) error {
-	return fmt.Errorf("%s: %v", msg, err)
 }
