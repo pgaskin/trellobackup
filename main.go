@@ -19,46 +19,77 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 3 && len(os.Args) != 4 {
-		fmt.Println("Usage: trellobackup USERNAME PASSWORD [TOTP_SECRET]")
+	if len(os.Args) != 2 && len(os.Args) != 3 && len(os.Args) != 4 {
+		fmt.Println("Usage: trellobackup (TOKEN_COOKIE | USERNAME PASSWORD [TOTP_SECRET])")
+		fmt.Println("Note: If you're using an Atlassian account, you must use the token cookie.")
 		os.Exit(1)
-	}
-	username, password, totp := os.Args[1], os.Args[2], ""
-
-	if len(os.Args) == 4 {
-		totp = os.Args[3]
 	}
 
 	c := &http.Client{}
 	c.Jar, _ = cookiejar.New(nil)
 
-	fmt.Println("Getting login token")
-	token, err := getLoginToken(c)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: could not get login token: %v\n", err)
-		os.Exit(1)
-	}
+	switch len(os.Args) - 1 {
+	case 1:
+		fmt.Println("Logging in with token cookie")
+		u, err := url.Parse("https://trello.com")
+		if err != nil {
+			panic(err)
+		}
+		c.Jar.SetCookies(u, []*http.Cookie{&http.Cookie{
+			Name:     "token",
+			Domain:   "trello.com",
+			Path:     "/",
+			Expires:  time.Now().Add(time.Hour),
+			SameSite: http.SameSiteDefaultMode,
+			HttpOnly: false,
+			Value:    os.Args[1],
+		}})
+	case 2, 3:
+		fmt.Println("Logging in with Trello account")
+		var password, totp string
+		username, password, totp := os.Args[1], os.Args[2], ""
 
-	fmt.Println("Authenticating")
-	authentication, err := getAuthentication(c, username, password, "")
-	if err != nil && strings.Contains(err.Error(), "TWO_FACTOR_MISSING") {
-		if totp == "" {
-			fmt.Fprintf(os.Stderr, "Error: could not authenticate: second factor required\n")
+		if len(os.Args) == 4 {
+			totp = os.Args[3]
+		}
+
+		fmt.Println("Getting login token")
+		token, err := getLoginToken(c)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: could not get login token: %v\n", err)
 			os.Exit(1)
 		}
-		authentication, err = getAuthentication(c, username, password, totp)
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: could not authenticate: %v\n", err)
-		os.Exit(1)
+
+		fmt.Println("Authenticating")
+		authentication, err := getAuthentication(c, username, password, "")
+		if err != nil && strings.Contains(err.Error(), "TWO_FACTOR_MISSING") {
+			if totp == "" {
+				fmt.Fprintf(os.Stderr, "Error: could not authenticate: second factor required\n")
+				os.Exit(1)
+			}
+			authentication, err = getAuthentication(c, username, password, totp)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: could not authenticate: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println("Updating session info")
+		err = updateSession(c, authentication, token)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: could not update session info: %v\n", err)
+			os.Exit(1)
+		}
+	default:
+		panic("invalid arguments")
 	}
 
-	fmt.Println("Updating session info")
-	err = updateSession(c, authentication, token)
+	username, err := getUsername(c)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: could not update session info: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: could not get username: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Println("Logged in as", username)
 
 	fmt.Println("Getting boards")
 	boards, err := getBoards(c)
@@ -184,7 +215,7 @@ func getAuthentication(c *http.Client, username, password, totpSecret string) (s
 
 	var obj struct{ Code, Error string }
 	if err := json.NewDecoder(resp.Body).Decode(&obj); err != nil {
-		return "", fmt.Errorf("decode response error: %w", err)
+		return "", fmt.Errorf("decode json: %w", err)
 	} else if obj.Error != "" {
 		return "", fmt.Errorf("api error: %s", obj.Error)
 	}
@@ -203,6 +234,23 @@ func updateSession(c *http.Client, authentication, token string) error {
 	return nil
 }
 
+func getUsername(c *http.Client) (string, error) {
+	var obj struct{ Username string }
+
+	resp, err := c.Get("https://trello.com/1/members/me?fields=username")
+	if err != nil {
+		return "", fmt.Errorf("send api request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("response status %s", resp.Status)
+	} else if err = json.NewDecoder(resp.Body).Decode(&obj); err != nil {
+		return "", fmt.Errorf("decode json: %w", err)
+	}
+	return obj.Username, nil
+}
+
 func getBoards(c *http.Client) (boards []struct {
 	ShortURL, ShortLink, ID, Name string
 	Closed                        bool
@@ -214,7 +262,7 @@ func getBoards(c *http.Client) (boards []struct {
 	defer resp.Body.Close()
 
 	if err := json.NewDecoder(resp.Body).Decode(&boards); err != nil {
-		return nil, fmt.Errorf("could not parse response body: %w", err)
+		return nil, fmt.Errorf("decode json: %w", err)
 	}
 	return boards, nil
 }
