@@ -1,4 +1,4 @@
-module github.com/geek1011/trellobackup
+module github.com/pgaskin/trellobackup
 
 go 1.14
 
